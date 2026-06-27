@@ -4,11 +4,13 @@ import { getAuth } from '@clerk/nextjs/server';
 import { NextRequest } from 'next/server';
 import prisma from '@/lib/prisma';
 import { UserRole } from '@prisma/client';
+import { rateLimit } from '@/lib/rate-limit';
 
 export interface TRPCContext {
   userId: string | null;
   tenantId: string | null;
   role: UserRole | null;
+  ip: string;
 }
 
 /**
@@ -17,7 +19,9 @@ export interface TRPCContext {
  */
 export async function createTRPCContext(opts: { req: Request }): Promise<TRPCContext> {
   const req = opts.req as NextRequest;
+  const nextReq = req as any;
   const tenantId = req.headers.get('x-tenant-id');
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0] || nextReq.ip || '127.0.0.1';
   
   let userId: string | null = null;
   try {
@@ -42,6 +46,7 @@ export async function createTRPCContext(opts: { req: Request }): Promise<TRPCCon
     userId,
     tenantId,
     role,
+    ip,
   };
 }
 
@@ -60,6 +65,15 @@ export const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
     throw new TRPCError({
       code: 'BAD_REQUEST',
       message: 'Tenant context header (x-tenant-id) is missing.',
+    });
+  }
+
+  // Enforce rate limit check: 100 requests per minute per IP address
+  const rateLimitResult = await rateLimit(ctx.ip, 100, 60);
+  if (!rateLimitResult.success) {
+    throw new TRPCError({
+      code: 'TOO_MANY_REQUESTS',
+      message: 'API rate limit of 100 requests per minute exceeded. Please try again later.',
     });
   }
 
@@ -94,3 +108,4 @@ export const creatorProcedure = protectedProcedure.use(async ({ ctx, next }) => 
 
   return next();
 });
+export default t;
