@@ -1,0 +1,549 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Core tenant model
+model Tenant {
+  id           String          @id @default(cuid())
+  slug         String          @unique
+  name         String
+  description  String?
+  logoUrl      String?
+  primaryColor String?
+  customDomain String?
+  plan         Plan            @default(STARTER)
+  status       TenantStatus    @default(ACTIVE)
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  // Relations
+  members      Member[]
+  users        User[]
+  tiers        Tier[]
+  products     Product[]
+  courses      Course[]
+  posts        Post[]
+  events       Event[]
+  workflows    Workflow[]
+  tasks        Task[]
+  invoices     Invoice[]
+  analytics    AnalyticsEvent[]
+  settings     TenantSettings?
+  messages     Message[]
+
+  @@index([slug])
+  @@index([customDomain])
+  @@index([plan, status])
+}
+
+// Tenant specific settings
+model TenantSettings {
+  id             String   @id @default(cuid())
+  tenantId       String   @unique
+  tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customDomain   String?
+  logoUrl        String?
+  brandColor     String?
+  welcomeMessage String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+}
+
+// Users (creator + team members)
+model User {
+  id           String      @id @default(cuid())
+  tenantId     String
+  email        String
+  name         String
+  avatarUrl    String?
+  role         UserRole    @default(MEMBER)
+  status       UserStatus  @default(ACTIVE)
+  lastActiveAt DateTime?
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  tenant       Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tasksAssigned Task[]     @relation("AssignedTo")
+  tasksCreated Task[]      @relation("CreatedBy")
+  activityLogs ActivityLog[]
+
+  @@unique([tenantId, email])
+  @@index([tenantId, role])
+  @@index([tenantId, status])
+}
+
+// Community members (paying customers)
+model Member {
+  id               String           @id @default(cuid())
+  tenantId         String
+  email            String
+  name             String
+  phone            String?
+  avatarUrl        String?
+  tierId           String?
+  status           MemberStatus     @default(ACTIVE)
+  engagementScore  Int              @default(0)
+  churnRiskScore   Int?
+  lifetimeValue    Decimal          @default(0)
+  totalSpent       Decimal          @default(0)
+  joinedAt         DateTime         @default(now())
+  lastActiveAt     DateTime?
+  churnedAt        DateTime?
+  tags             String[]
+  customFields     Json?
+  stripeCustomerId String?
+  whatsappId       String?
+  telegramId       String?
+  discordId        String?
+  referralCode     String?          @unique
+  referredById     String?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  tenant           Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  tier             Tier?            @relation(fields: [tierId], references: [id], onDelete: SetNull)
+  payments         Payment[]
+  courseProgress   CourseProgress[]
+  eventRSVPs       EventRSVP[]
+  posts            Post[]
+  messages         Message[]
+  activities       MemberActivity[]
+  invoices         Invoice[]
+  referredBy       Member?          @relation("Referrals", fields: [referredById], references: [id], onDelete: SetNull)
+  referrals        Member[]         @relation("Referrals")
+
+  @@unique([tenantId, email])
+  @@index([tenantId, status])
+  @@index([tenantId, engagementScore])
+  @@index([tenantId, churnRiskScore])
+  @@index([tenantId, tags])
+}
+
+// Membership tiers
+model Tier {
+  id                String         @id @default(cuid())
+  tenantId          String
+  name              String
+  description       String?
+  price             Decimal
+  interval          Interval       @default(MONTH)
+  features          String[]
+  discordRoleId     String?
+  telegramGroupId   String?
+  welcomeSequenceId String?
+  isDefault         Boolean        @default(false)
+  isPublic          Boolean        @default(true)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  tenant            Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  members           Member[]
+
+  @@index([tenantId, isDefault])
+  @@index([tenantId, isPublic])
+}
+
+// Products (courses, digital products, event tickets)
+model Product {
+  id          String           @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+  type        ProductType
+  price       Decimal
+  isRecurring Boolean          @default(false)
+  interval    Interval?
+  content     Json?
+  status      ProductStatus    @default(DRAFT)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  tenant      Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  payments    Payment[]
+  progress    CourseProgress[]
+
+  @@index([tenantId, type])
+  @@index([tenantId, status])
+}
+
+// Payments
+model Payment {
+  id                     String        @id @default(cuid())
+  tenantId               String
+  memberId               String
+  productId              String?
+  amount                 Decimal
+  currency               String        @default("USD")
+  status                 PaymentStatus
+  stripePaymentIntentId  String?
+  stripeSubscriptionId   String?
+  invoiceUrl             String?
+  createdAt              DateTime      @default(now())
+  updatedAt              DateTime      @updatedAt
+
+  member                 Member        @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  product                Product?      @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, memberId])
+  @@index([tenantId, status])
+  @@index([stripePaymentIntentId])
+}
+
+// Invoices
+model Invoice {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  memberId  String
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  amount    Decimal
+  currency  String   @default("USD")
+  status    String
+  pdfUrl    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([tenantId, memberId])
+}
+
+// Community posts
+model Post {
+  id             String       @id @default(cuid())
+  tenantId       String
+  memberId       String?
+  userId         String?
+  title          String?
+  content        String
+  type           PostType     @default(TEXT)
+  mediaUrls      String[]
+  likes          Int          @default(0)
+  comments       Int          @default(0)
+  isPinned       Boolean      @default(false)
+  isAnnouncement Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  member         Member?      @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, isPinned])
+  @@index([tenantId, memberId])
+}
+
+// Events
+model Event {
+  id           String       @id @default(cuid())
+  tenantId     String
+  title        String
+  description  String?
+  startAt      DateTime
+  endAt        DateTime?
+  timezone     String
+  maxAttendees Int?
+  price        Decimal      @default(0)
+  isVirtual    Boolean      @default(true)
+  meetingUrl   String?
+  recordingUrl String?
+  status       EventStatus  @default(SCHEDULED)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  rsvps        EventRSVP[]
+
+  @@index([tenantId, startAt])
+  @@index([tenantId, status])
+}
+
+// Event RSVP
+model EventRSVP {
+  id        String   @id @default(cuid())
+  eventId   String
+  event     Event    @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  memberId  String
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  status    String   @default("YES") // YES, NO, MAYBE
+  createdAt DateTime @default(now())
+
+  @@unique([eventId, memberId])
+}
+
+// Course Builder Structure
+model Course {
+  id          String   @id @default(cuid())
+  tenantId    String
+  tenant      Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title       String
+  description String?
+  published   Boolean  @default(false)
+  modules     Module[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model Module {
+  id       String   @id @default(cuid())
+  courseId String
+  course   Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  title    String
+  order    Int
+  lessons  Lesson[]
+}
+
+model Lesson {
+  id        String   @id @default(cuid())
+  moduleId  String
+  module    Module   @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  title     String
+  content   String?
+  videoUrl  String?
+  duration  Int?
+  order     Int
+}
+
+// Course Progress
+model CourseProgress {
+  id               String   @id @default(cuid())
+  memberId         String
+  member           Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  productId        String
+  product          Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  completedLessons String[] // Lesson IDs
+  lastAccessed     DateTime @default(now())
+
+  @@unique([memberId, productId])
+}
+
+// Direct Messaging & Member Interaction
+model Message {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  memberId  String
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  content   String
+  direction String   // INBOUND, OUTBOUND, DM
+  createdAt DateTime @default(now())
+
+  @@index([tenantId, memberId])
+}
+
+// Member Activity tracking
+model MemberActivity {
+  id           String   @id @default(cuid())
+  memberId     String
+  member       Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  activityType String   // e.g., POST_CREATED, COMMENT_CREATED, EVENT_RSVP
+  description  String?
+  timestamp    DateTime @default(now())
+}
+
+// Tasks (team management)
+model Task {
+  id              String     @id @default(cuid())
+  tenantId        String
+  title           String
+  description     String?
+  status          TaskStatus @default(TODO)
+  priority        Priority   @default(MEDIUM)
+  dueDate         DateTime?
+  assignedToId    String?
+  createdById     String
+  relatedMemberId String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  tenant          Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  assignedTo      User?      @relation("AssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+  createdBy       User       @relation("CreatedBy", fields: [createdById], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, status])
+  @@index([tenantId, assignedToId])
+  @@index([tenantId, dueDate])
+}
+
+// Workflows & automations
+model Workflow {
+  id          String    @id @default(cuid())
+  tenantId    String
+  name        String
+  description String?
+  trigger     Json      // { type: "MEMBER_JOINED", conditions: [...] }
+  actions     Json      // [{ type: "SEND_EMAIL", config: {...} }, ...]
+  isActive    Boolean   @default(true)
+  runCount    Int       @default(0)
+  lastRunAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, isActive])
+}
+
+// AI Insights
+model AIInsight {
+  id           String      @id @default(cuid())
+  tenantId     String
+  type         InsightType
+  severity     Severity
+  title        String
+  description  String
+  data         Json?
+  actionTaken  String?
+  dismissedAt  DateTime?
+  createdAt    DateTime    @default(now())
+
+  @@index([tenantId, type])
+  @@index([tenantId, severity])
+  @@index([tenantId, dismissedAt])
+}
+
+// Analytics events
+model AnalyticsEvent {
+  id        String   @id @default(cuid())
+  tenantId  String
+  memberId  String?
+  eventType String
+  properties Json?
+  timestamp DateTime @default(now())
+
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, eventType])
+  @@index([tenantId, timestamp])
+  @@index([tenantId, memberId, eventType])
+}
+
+// Activity logs (audit trail)
+model ActivityLog {
+  id         String   @id @default(cuid())
+  tenantId   String
+  userId     String?
+  action     String
+  entityType String
+  entityId   String
+  changes    Json?
+  ipAddress  String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, entityType, entityId])
+  @@index([tenantId, userId])
+}
+
+// Enums
+enum Plan {
+  STARTER
+  GROWTH
+  EMPIRE
+}
+
+enum UserRole {
+  CREATOR
+  ADMIN
+  EDITOR
+  COMMUNITY_MANAGER
+  VA
+  MEMBER
+}
+
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+  PAUSED
+  CHURNED
+}
+
+enum ProductType {
+  COURSE
+  DIGITAL_PRODUCT
+  EVENT_TICKET
+  MEMBERSHIP
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum PostType {
+  TEXT
+  IMAGE
+  VIDEO
+  POLL
+  LINK
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  REVIEW
+  DONE
+  CANCELLED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum InsightType {
+  CHURN_RISK
+  REVENUE_DROP
+  ENGAGEMENT_DROP
+  PRICING_SUGGESTION
+  CONTENT_IDEA
+}
+
+enum Severity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum Interval {
+  DAY
+  WEEK
+  MONTH
+  YEAR
+}
+
+enum EventStatus {
+  SCHEDULED
+  LIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum ProductStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+  DELETED
+}
+
+enum UserStatus {
+  ACTIVE
+  INVITED
+  DISABLED
+}
